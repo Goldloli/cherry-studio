@@ -77,6 +77,7 @@ import type {
   StreamErrorResult,
   StreamExecution,
   StreamListener,
+  StreamPausedResult,
   TransportTimings
 } from './types'
 import { withReasoningTimingMetadata } from './withReasoningTimingMetadata'
@@ -1654,7 +1655,7 @@ export class AiStreamManager extends BaseService {
 
     const settleTerminalDispatch = this.beginTerminalDispatch(topicId)
     try {
-      await this.dispatchToListeners(stream, 'onError', (listener) => listener.onError(result))
+      await this.dispatchToListeners(stream, exec, result)
 
       // See onExecutionDone: awaited terminal dispatch may outlive this stream's registry slot.
       if (this.activeStreams.get(topicId) !== stream) return
@@ -2013,6 +2014,12 @@ export class AiStreamManager extends BaseService {
     if (!stream) return { found: false }
 
     for (const exec of stream.executions.values()) {
+      if (exec.persistence?.status === 'saved') continue
+      if (exec.sourceKind === 'messages') {
+        const part = exec.finalMessage?.parts.find((part) => isToolUIPart(part) && part.toolCallId === toolCallId)
+        if (part && isToolUIPart(part) && part.state === 'output-available') return { found: true, output: part.output }
+        continue
+      }
       if (exec.deferredOutputs?.has(toolCallId)) {
         return { found: true, output: exec.deferredOutputs.get(toolCallId) }
       }
@@ -2243,7 +2250,7 @@ export class AiStreamManager extends BaseService {
       timings: { ...exec.timings },
       runtimeTiming: exec.runtimeTiming.snapshot()
     }
-    await this.dispatchToListeners(stream, 'onDone', (listener) => listener.onDone(result))
+    await this.dispatchToListeners(stream, exec, result)
   }
 
   private async broadcastExecutionPaused(
@@ -2263,7 +2270,7 @@ export class AiStreamManager extends BaseService {
       timings: { ...exec.timings },
       runtimeTiming: exec.runtimeTiming.snapshot()
     }
-    await this.dispatchToListeners(stream, 'onPaused', (listener) => listener.onPaused(result))
+    await this.dispatchToListeners(stream, exec, result)
   }
 
   private getTopicAttemptWatermark(stream: ActiveStream): number {
@@ -2280,8 +2287,8 @@ export class AiStreamManager extends BaseService {
    */
   private async dispatchToListeners(
     stream: ActiveStream,
-    event: 'onDone' | 'onPaused' | 'onError',
-    invoke: (listener: StreamListener) => void | Promise<void>
+    exec: StreamExecution,
+    result: StreamDoneResult | StreamPausedResult | StreamErrorResult
   ): Promise<void> {
     const dead: string[] = []
     const listeners = [...stream.listeners]
@@ -2306,14 +2313,23 @@ export class AiStreamManager extends BaseService {
         )
       }
       try {
-        await invoke(listener)
+        const dispatch =
+          result.status === 'success'
+            ? listener.onDone(result)
+            : result.status === 'paused'
+              ? listener.onPaused(result)
+              : listener.onError(result)
+        exec.finalMessage = result.finalMessage
+        await dispatch
       } catch (err) {
         if (listener.terminalPhase === 'persistence' && err instanceof TerminalPersistenceError) {
           suppressNotification = true
           continue
         }
-        logger.warn('Listener threw', { topicId: stream.topicId, listenerId: id, event, err })
+        logger.warn('Listener threw', { topicId: stream.topicId, listenerId: id, status: result.status, err })
       } finally {
+        exec.finalMessage = result.finalMessage
+        exec.persistence = result.persistence
         if (tracksPersistence) {
           const remaining = (this.terminalPersistenceCounts.get(stream.topicId) ?? 1) - 1
           if (remaining === 0) this.terminalPersistenceCounts.delete(stream.topicId)
