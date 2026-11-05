@@ -23,16 +23,16 @@ const EMPTY_CHERRY_CLOUD_AVAILABILITY: CherryCloudModelSyncResult = {
  */
 export function useCherryCloudModelAvailability(enabled = true) {
   const { t } = useTranslation()
-  const { data: cloudAvailability, mutate } = useSWR(
-    enabled ? CHERRY_CLOUD_AVAILABILITY_KEY : null,
-    () => ipcApi.request('cherry_cloud.models.sync'),
-    {
-      dedupingInterval: 5_000,
-      refreshInterval: CHERRY_CLOUD_AVAILABILITY_REFRESH_INTERVAL_MS,
-      revalidateOnReconnect: false,
-      shouldRetryOnError: false
-    }
-  )
+  const {
+    data: cloudAvailability,
+    isValidating,
+    mutate
+  } = useSWR(enabled ? CHERRY_CLOUD_AVAILABILITY_KEY : null, () => ipcApi.request('cherry_cloud.models.sync'), {
+    dedupingInterval: 5_000,
+    refreshInterval: CHERRY_CLOUD_AVAILABILITY_REFRESH_INTERVAL_MS,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false
+  })
 
   useIpcOn('cherry_cloud.status_changed', () => {
     if (!enabled) return
@@ -44,10 +44,18 @@ export function useCherryCloudModelAvailability(enabled = true) {
     const quotaExhaustedModelIds = new Set(cloudAvailability?.quotaExhaustedModelIds)
     const agentModelIds = new Set(cloudAvailability?.availableModelIds.agent)
     const generalModelIds = new Set(cloudAvailability?.availableModelIds.general)
+    // The placeholder set on a status change is not a verdict until the fresh snapshot replaces it.
+    const settled =
+      cloudAvailability !== undefined && !(cloudAvailability === EMPTY_CHERRY_CLOUD_AVAILABILITY && isValidating)
 
     return {
       /** Hidden until the first snapshot arrives, then hidden wherever the server does not enable it. */
       isModelHidden: (model: Model, includeAgentOnlyModels: boolean) =>
+        isManagedCherryCloudModel(model.providerId) &&
+        !(includeAgentOnlyModels ? agentModelIds : generalModelIds).has(model.id),
+      /** Unusable here per a settled snapshot: signed out, not entitled, or not enabled for this module. */
+      isModelLocked: (model: Model, includeAgentOnlyModels: boolean) =>
+        settled &&
         isManagedCherryCloudModel(model.providerId) &&
         !(includeAgentOnlyModels ? agentModelIds : generalModelIds).has(model.id),
       /** The built-in CherryAI models and Cloud models granted only by a free plan. */
@@ -68,5 +76,5 @@ export function useCherryCloudModelAvailability(enabled = true) {
         )
       }
     }
-  }, [cloudAvailability, t])
+  }, [cloudAvailability, isValidating, t])
 }
