@@ -706,8 +706,9 @@ The package interprets Claude SDK frames once and delivers typed control facts b
   pricing and product attribution only for external-CLI subscription capture; Gateway has its
   own single billing writer. The initial baseline emits no historical invocations.
 - `session` updates the native binding and opaque resume token, including before failure.
-- `context-usage` describes occupancy at the current provider call; the post-turn
-  `getContextUsage()` pull remains authoritative.
+- Top-level input usage is published by the package as a common `context.changed` reading
+  marked `last-request`, excluding output and cumulative billing. The host's post-turn
+  `getContextUsage()` pull replaces it with the native current-context estimate.
 - `result` carries cumulative display usage, native identity and a typed failure when present.
   Main publishes the corresponding body before ending the product turn. A replayed
   task-notification result cannot settle a user turn; a result belonging to an active
@@ -719,11 +720,6 @@ The package interprets Claude SDK frames once and delivers typed control facts b
   receives unseen terminal/control facts after their body, or an explicit unrecoverable gap.
 - Permission denial and explicit retractions are applied by the native projection. Main's
   metadata decorator handles display-only MCP metadata, reminders and thinking timing.
-
-- Top-level input usage is published by the package as a common `context.changed` reading
-  marked `last-request`, excluding output and cumulative billing. The host's post-turn
-  `getContextUsage()` pull replaces it with the native current-context estimate.
-
 
 The settings builder also installs `PostToolUse` and
 `PostToolUseFailure` hooks. Their SDK-reported `duration_ms` is forwarded to
